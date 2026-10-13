@@ -474,3 +474,64 @@ test("a seat whose turn fails without a commit is not called implemented", async
   assert.ok(!state.integrationBranch, "nothing may be merged when nothing was built");
   assert.equal(state.reviews.length, 0, "an abandoned unit is not sent to review");
 });
+
+test("a repo with no checks is merged but never claimed to be verified", async () => {
+  const repo = await makeRepo({ withCheck: false });
+  const config = await loadConfig(repo, {
+    councilHome: join(repo, ".council"),
+    checks: [],
+    limits: { critiqueRounds: 1, reviewRounds: 1, peerDepth: 1, turnTimeoutMs: 60_000 },
+  });
+  const onlyAlpha = [{ id: "alpha", title: "Write alpha", files: ["src/alpha.txt"], owner: "claude" }];
+  const seat = (id: string) => {
+    const adapter = new FakeAdapter(id, (request) => {
+      const kind = turnKind(request);
+      if (kind === "plan") return planJson(id, onlyAlpha);
+      if (kind === "critique") {
+        return JSON.stringify({ verdict: "endorse", findings: [], mergedPlan: JSON.parse(planJson(id, onlyAlpha)) });
+      }
+      if (kind === "vote") {
+        const hashes = [...new Set([...request.prompt.matchAll(/planHash ([0-9a-f]{64})/g)].map((m) => m[1]!))];
+        return JSON.stringify({ votes: hashes.map((planHash) => ({ planHash, position: "agree", rationale: "" })) });
+      }
+      if (kind === "implement") {
+        return JSON.stringify({ summary: "wrote it", filesTouched: ["src/alpha.txt"], selfCheck: "", unresolved: [] });
+      }
+      if (kind === "review") return JSON.stringify({ verdict: "approve", summary: "fine", findings: [] });
+      return JSON.stringify({});
+    });
+    const inner = adapter.run.bind(adapter);
+    adapter.run = async (request: AgentRequest) => {
+      const result = await inner(request);
+      if (turnKind(request) === "implement") {
+        await writeFile(join(request.workspace, "src/alpha.txt"), `${id}\n`, "utf8");
+      }
+      return result;
+    };
+    return adapter;
+  };
+
+  // The plan's own acceptanceChecks are an agent's claim, not the repo's gate,
+  // and this fixture has no package.json for `npm run test` to work from.
+  const state = await new Council({ config, adapters: [seat("claude"), seat("muse")] }).run({
+    goal: "add alpha",
+    taskId: "nogate",
+  });
+
+  assert.notEqual(state.phase, "done", "agreement alone must not count as verified");
+  assert.equal(state.phase, "escalated");
+  assert.match(state.escalation?.reason ?? "", /declares no checks|does not pass/);
+  // The work is not thrown away: it merged, it is just not blessed.
+  assert.ok(state.integrationBranch, "the branch still exists for a human to read");
+});
+
+test("requireChecks can be switched off deliberately", async () => {
+  const repo = await makeRepo({ withCheck: false });
+  const config = await loadConfig(repo, {
+    councilHome: join(repo, ".council"),
+    checks: ['node -e "process.exit(0)"'],
+    requireChecks: false,
+  });
+  assert.equal(config.requireChecks, false);
+  assert.equal((await loadConfig(repo, { councilHome: join(repo, ".council") })).requireChecks, true);
+});

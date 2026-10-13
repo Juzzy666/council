@@ -198,6 +198,7 @@ the back of repository text would be that hazard with extra steps.
   },
   "tiebreak": "human",                // or "judge" + "judgeSeat"
   "checks": [],                       // empty = detect from the repo
+  "requireChecks": true,              // no gate at all => escalate, never "done"
   "museApp": { "enabled": false, "requireHumanApproval": true },
   "push": false
 }
@@ -209,7 +210,7 @@ so CI can cap a run without editing a tracked file.
 ## Tests
 
 ```sh
-npm test                                        # 37 offline tests, no API key, no network
+npm test                                        # 39 offline tests, no API key, no network
 COUNCIL_LIVE=1 COUNCIL_LIVE_MODEL=haiku \
   node --test dist-test/test/live.test.js       # 4 tests against the real claude CLI
 ```
@@ -250,6 +251,9 @@ Stated rather than hidden, because each one would otherwise look like a bug:
   handshake; that could not be confirmed against the official specification
   from this environment, and the SDK does not list it. Version negotiation is
   the SDK's.
+- **A repository with no checks cannot be verified.** `requireChecks` (on by
+  default) makes that an escalation rather than a pass: the branch is merged and
+  kept, but the run is never called `done` on the strength of agreement alone.
 - **Single-seat runs are not councils.** With one seat there is no critique and
   no cross-review. The ledger records that as a degraded run.
 

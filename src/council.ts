@@ -653,6 +653,30 @@ export class Council {
       return false;
     }
 
+    if (commands.length === 0 && this.#config.requireChecks) {
+      // `allPassed([])` is true, so without this a repo that declares no checks
+      // would reach `done` having verified nothing at all.
+      await this.#record("engine", "integration_result", {
+        branch,
+        merged: report.merged,
+        conflicts: [],
+        worktree: report.worktree,
+        checksPassed: false,
+        ok: false,
+        reason: "no objective gate",
+      });
+      this.#state.integrationBranch = branch;
+      await this.#escalate(
+        "The seats agreed and the branches merged cleanly, but this repository " +
+          "declares no checks, so nothing verified the result.",
+        "verification",
+        Object.fromEntries(seats.map((seat) => [seat, "agreed; unverified by anything but the other seat"])),
+        `Review ${branch} yourself, add a test command to council.config.json \`checks\`, ` +
+          "or set `requireChecks: false` to accept agreement alone as the bar.",
+      );
+      return false;
+    }
+
     const results = await runChecks(commands, report.worktree);
     for (const result of results) {
       this.#state.checks.push(result);

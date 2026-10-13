@@ -3,17 +3,26 @@
   "version": "0.1.0",
   "description": "A peer council between Claude Code and Meta's Muse: two coding agents that plan independently, critique each other, split the work in isolated git worktrees, cross-review the diffs, and only land on consensus.",
   "type": "module",
-  "engines": { "node": ">=20" },
-  "bin": { "council": "dist/cli.js" },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "council": "dist/cli.js"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist-test/test/*.test.js",
+    "test": "npm run build:test && node --test dist-test/test/*.test.js",
     "test:only": "node --test dist-test/test/*.test.js",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test:live": "npm run build:test && COUNCIL_LIVE=1 node --test dist-test/test/live.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1"

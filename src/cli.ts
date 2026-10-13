@@ -281,7 +281,9 @@ async function cmdDoctor(args: Args): Promise<number> {
   }
 
   const checks = config.checks.length > 0 ? [...config.checks] : await detectChecks(config.repoRoot);
-  lines.push(`checks    ${checks.length > 0 ? checks.join(" | ") : "none detected — the council will have no objective gate"}`);
+  lines.push(
+    `checks    ${checks.length > 0 ? checks.join(" | ") : `none detected — ${config.requireChecks ? "a run will merge, then escalate as unverified" : "requireChecks is off, so agreement alone will pass"}`}`,
+  );
   lines.push(`budget    $${config.budget.perTaskUsd} per task, $${config.budget.perTurnUsd} per turn`);
   lines.push(`tiebreak  ${config.tiebreak}`);
   lines.push(`museApp   ${config.museApp.enabled ? (config.museApp.bridgeCmd ? `bridge: ${config.museApp.bridgeCmd}` : "enabled, manual paste") : "disabled"}`);
@@ -313,6 +315,7 @@ async function cmdInit(args: Args): Promise<number> {
       limits: config.limits,
       tiebreak: config.tiebreak,
       checks: config.checks.length > 0 ? config.checks : await detectChecks(config.repoRoot),
+      requireChecks: config.requireChecks,
       museApp: config.museApp,
       push: config.push,
     };

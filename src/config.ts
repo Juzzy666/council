@@ -80,6 +80,16 @@ export interface CouncilConfig {
   readonly judgeSeat: AgentId;
   /** Acceptance commands. Empty means "detect from the repo". */
   readonly checks: readonly string[];
+  /**
+   * Refuse to call a run `done` when there is no objective gate at all.
+   *
+   * With no checks, "the checks passed" degenerates to "no checks ran", and the
+   * only thing left supporting the result is that both agents liked it. For an
+   * unattended run across many repositories that is the difference between a
+   * council and a rubber stamp, so the default is to escalate instead: the work
+   * is still on its integration branch, it just is not claimed to be verified.
+   */
+  readonly requireChecks: boolean;
   readonly museApp: MuseAppConfig;
   /** Push the integration branch when the run lands. Off by default. */
   readonly push: boolean;
@@ -106,6 +116,7 @@ export const DEFAULT_CONFIG: Omit<CouncilConfig, "repoRoot" | "councilHome" | "b
   tiebreak: "human",
   judgeSeat: CLAUDE,
   checks: [],
+  requireChecks: true,
   museApp: { enabled: false, requireHumanApproval: true },
   push: false,
 };
@@ -159,6 +170,7 @@ export async function loadConfig(
     tiebreak: overrides.tiebreak ?? fromFile.tiebreak ?? DEFAULT_CONFIG.tiebreak,
     judgeSeat: overrides.judgeSeat ?? fromFile.judgeSeat ?? DEFAULT_CONFIG.judgeSeat,
     checks: overrides.checks ?? fromFile.checks ?? DEFAULT_CONFIG.checks,
+    requireChecks: overrides.requireChecks ?? fromFile.requireChecks ?? DEFAULT_CONFIG.requireChecks,
     museApp: { ...DEFAULT_CONFIG.museApp, ...fromFile.museApp, ...overrides.museApp },
     push: overrides.push ?? fromFile.push ?? DEFAULT_CONFIG.push,
   };
