@@ -1,0 +1,29 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "description": "A peer council between Claude Code and Meta's Muse: two coding agents that plan independently, critique each other, split the work in isolated git worktrees, cross-review the diffs, and only land on consensus.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "council": "dist/cli.js" },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist-test/test/*.test.js",
+    "test:only": "node --test dist-test/test/*.test.js",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "optionalDependencies": {
+    "@muse-code/sdk": "^1.4.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}
