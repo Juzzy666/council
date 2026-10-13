@@ -195,3 +195,15 @@ export async function integrate(
   }
   return { branch, merged, conflicts, worktree: tree.path };
 }
+
+/**
+ * Per-command GitHub credentials.
+ *
+ * Passed as `-c` arguments rather than written into the checkout's config, so a
+ * token never ends up in `.git/config` where a later command, a backup or a
+ * careless `cat` would find it.
+ */
+export function authArgs(token: string): string[] {
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  return ["-c", `http.https://github.com/.extraheader=Authorization: Basic ${basic}`];
+}

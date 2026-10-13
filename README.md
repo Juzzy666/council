@@ -210,7 +210,7 @@ so CI can cap a run without editing a tracked file.
 ## Tests
 
 ```sh
-npm test                                        # 39 offline tests, no API key, no network
+npm test                                        # 67 offline tests, no API key, no network
 COUNCIL_LIVE=1 COUNCIL_LIVE_MODEL=haiku \
   node --test dist-test/test/live.test.js       # 4 tests against the real claude CLI
 ```
@@ -222,10 +222,80 @@ green run proves the integration merge actually happened. The peer channel is
 tested by connecting to it with the official MCP client, the same way a real
 runtime does.
 
+## Running it unattended
+
+A council you have to sit with is a demo. The sweep is the part that runs
+without you: it reads labelled GitHub issues across the repositories you list,
+convenes the council on each, and lands the result.
+
+```sh
+council sweep                 # one pass over every configured project
+council sweep --dry-run       # what it would do; claims nothing, writes nothing
+council sweep --only you/repo # one project
+council publish               # push the report to Vercel Blob for a status page
+```
+
+**A task is an issue.** File one with the `council` label; the title is the
+goal. Two optional sections make the run much better:
+
+```markdown
+The retry loop pins a core and never gives up.
+
+## Constraints
+- do not change the public API
+
+## Acceptance
+- `npm test`
+- `npm run lint`
+```
+
+The acceptance commands become the objective gate for that task — the thing
+that decides whether the work is merged or handed back to you.
+
+**What it does with the result**, set by `autonomy`:
+
+| situation | what happens |
+|---|---|
+| done, every unit approved, repo's checks green | merged, issue commented and closed, branch deleted |
+| checks failed, or the seats escalated | branch pushed, **draft** PR opened, issue labelled `council:parked`, you are notified |
+| repository declares no checks | branch pushed, PR opened, **never merged** — nothing verified it (`mergeWithoutChecks` overrides this) |
+| GitHub refuses the merge (branch protection, conflict) | reported once on the issue, never retried in a loop |
+
+A task is claimed by label swap (`council` → `council:running`) *before* the
+work starts, so an overlapping sweep cannot pick up the same issue. The
+`sweep.budgetUsd` ceiling spans the whole pass, not one task. A repository that
+is not listed in `projects` is never touched.
+
+### Where the loop runs
+
+The sweep needs a git checkout, worktrees and two CLI binaries for minutes at a
+time, so it needs real compute. Three ways, same command:
+
+- **GitHub Actions** — `examples/github-actions/` has a scheduled sweep and a
+  watchdog that redispatches it if a cron is dropped.
+- **Vercel Sandbox** — `examples/vercel-sandbox/` has a route that starts a
+  sandbox (45 min on Hobby, up to 24 h on Pro/Enterprise) and returns at once,
+  so the function's own duration limit never applies to the run.
+- **Anything with cron** — `council sweep` on a timer on a machine you own.
+
+### Seeing it without reading logs
+
+`council publish` uploads the sweep report to Vercel Blob, and
+`examples/dashboard/council.html` is a single static page that renders it: what
+merged, what is waiting for you and why, and what it cost. Drop it into a site
+you already host and point `BLOB_URL` at the published object.
+
 ## Known limits
 
 Stated rather than hidden, because each one would otherwise look like a bug:
 
+- **The Muse seat has never been executed.** This is the big one. The adapter is
+  written against the published `@muse-code/sdk` 1.4.7 types and the committed
+  MSP protocol schema and typechecks against both, but Meta's installer host was
+  unreachable from the machine this was built on, so not one live Muse turn has
+  run. Everything demonstrated end to end — plans, worktrees, cross-review, the
+  merge, the peer channel — was the Claude seat. Do a supervised two-seat run
+  (`council plan` is cheapest) before trusting an unattended one.
 - **Muse Code reports no cost.** `turn/completed` carries duration and a
   terminal, not dollars, so the spend figure covers the Claude seat only. The
   CLI says so wherever it prints spend, instead of implying the Muse turns were
@@ -284,6 +354,17 @@ src/checks.ts        detecting and running the repo's own gate
 src/adapters/        claude-code · muse-code · muse-app · fake
 src/mcp/server.ts    the live peer channel
 src/cli.ts           the command line
+
+src/sweep.ts         the unattended pass over every project
+src/landing.ts       what an autonomous run may do to a repository
+src/github.ts        issues in, pull requests out
+src/sources/         turning a GitHub issue into a brief
+src/notify.ts        ntfy and webhook reporting
+src/publish.ts       the sweep report, for a status page
+
+examples/github-actions/   scheduled sweep + watchdog
+examples/vercel-sandbox/   run it on your own Vercel infrastructure
+examples/dashboard/        a static status page
 ```
 
 ## License

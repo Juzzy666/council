@@ -16,6 +16,9 @@ import { createSeats } from "./adapters/factory.js";
 import { MuseAppLane } from "./adapters/muse-app.js";
 import { writeMuseSettings } from "./adapters/muse-code.js";
 import { Ledger, foldTask, ledgerPath } from "./ledger.js";
+import { sweep } from "./sweep.js";
+import { tokenFromEnv } from "./github.js";
+import { blobTokenFromEnv, publishFile } from "./publish.js";
 import { detectChecks } from "./checks.js";
 import { currentBranch, isDirty, removeWorktree } from "./git.js";
 import type { ActionRequest, LedgerEvent, TaskState } from "./protocol.js";
@@ -32,8 +35,15 @@ Usage:
   council verify               Check the ledger's hash chain
   council actions [list|approve <id>|deny <id>]
                                The human gate for real-world Muse actions
+  council sweep                One unattended pass over every configured project
+  council publish              Upload the sweep report to Vercel Blob
   council clean <taskId>       Remove that task's worktrees
   council serve-mcp            Serve the peer channel (agents call this, not you)
+
+Options for sweep:
+  --only <owner/repo>   Restrict the pass to one project
+  --dry-run             Report what it would do; claim nothing, write nothing
+  --json                Print the full sweep report
 
 Options for run/plan:
   --constraint <text>   Repeatable. A limit the plan may not trade away.
@@ -58,7 +68,7 @@ function parseArgs(argv: readonly string[]): Args {
   const rest: string[] = [];
   const flags: Record<string, string[]> = {};
   const bools = new Set<string>();
-  const valued = new Set(["constraint", "accept", "base", "budget", "seat", "repo", "task"]);
+  const valued = new Set(["constraint", "accept", "base", "budget", "seat", "repo", "task", "only"]);
   for (let i = 0; i < tail.length; i += 1) {
     const token = tail[i]!;
     if (!token.startsWith("--")) {
@@ -286,6 +296,16 @@ async function cmdDoctor(args: Args): Promise<number> {
   );
   lines.push(`budget    $${config.budget.perTaskUsd} per task, $${config.budget.perTurnUsd} per turn`);
   lines.push(`tiebreak  ${config.tiebreak}`);
+  lines.push(
+    `autonomy  ${config.autonomy.mode}` +
+      (config.autonomy.mergeWhenGreen ? ", merges on a green gate" : ", never merges") +
+      (config.autonomy.mergeWithoutChecks ? ", WILL merge with no checks at all" : ""),
+  );
+  lines.push(
+    `sweep     ${config.projects.length} project(s), labels ${config.sweep.labels.join("+")}, budget $${config.sweep.budgetUsd}` +
+      `${tokenFromEnv() ? "" : " — no GitHub token in the environment"}`,
+  );
+  lines.push(`notify    ${config.notify.ntfyTopic ? `ntfy:${config.notify.ntfyTopic}` : "no ntfy topic"}${config.notify.webhookUrl ? " + webhook" : ""}`);
   lines.push(`museApp   ${config.museApp.enabled ? (config.museApp.bridgeCmd ? `bridge: ${config.museApp.bridgeCmd}` : "enabled, manual paste") : "disabled"}`);
 
   const ledger = new Ledger(ledgerPath(config.councilHome));
@@ -316,6 +336,11 @@ async function cmdInit(args: Args): Promise<number> {
       tiebreak: config.tiebreak,
       checks: config.checks.length > 0 ? config.checks : await detectChecks(config.repoRoot),
       requireChecks: config.requireChecks,
+      autonomy: config.autonomy,
+      notify: config.notify,
+      sweep: config.sweep,
+      publish: config.publish,
+      projects: config.projects,
       museApp: config.museApp,
       push: config.push,
     };
@@ -483,6 +508,82 @@ async function cmdActions(args: Args): Promise<number> {
   return 0;
 }
 
+async function cmdSweep(args: Args): Promise<number> {
+  const config = await configFor(args);
+  if (config.projects.length === 0) {
+    process.stderr.write(
+      [
+        "No projects configured, so there is nothing to sweep.",
+        "",
+        'Add them to council.config.json, e.g.:',
+        '  "projects": [{ "repo": "you/your-repo" }],',
+        '  "sweep": { "labels": ["council"] }',
+        "",
+        "A repository that is not listed is never touched.",
+      ].join("\n") + "\n",
+    );
+    return 2;
+  }
+  if (!tokenFromEnv()) {
+    process.stderr.write("Set COUNCIL_GITHUB_TOKEN (or GITHUB_TOKEN) — the sweep reads issues and writes pull requests.\n");
+    return 2;
+  }
+
+  const mode = config.autonomy.mode;
+  process.stdout.write(
+    `sweeping ${config.projects.length} project(s), ${mode}` +
+      `${mode === "autonomous" && config.autonomy.mergeWhenGreen ? " (will merge on a green gate)" : ""}` +
+      `, budget $${config.sweep.budgetUsd}\n\n`,
+  );
+
+  const report = await sweep({
+    config,
+    ...(args.flags["only"]?.[0] ? { onlyRepo: args.flags["only"][0] } : {}),
+    dryRun: args.bools.has("dry-run"),
+    log: (line) => process.stdout.write(`${line}\n`),
+  });
+
+  process.stdout.write("\n");
+  for (const result of report.results) {
+    process.stdout.write(
+      `${result.action.padEnd(13)} ${result.repo}#${result.issue}  ${result.pullRequest ?? result.branch ?? ""}\n` +
+        `              ${result.why}\n`,
+    );
+  }
+  process.stdout.write(
+    `\nspend $${report.spendUsd.toFixed(4)} of $${report.budgetUsd}` +
+      `${report.budgetExhausted ? " (exhausted)" : ""}\n`,
+  );
+  for (const error of report.errors) process.stdout.write(`error: ${error}\n`);
+  if (args.bools.has("json")) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return report.errors.length > 0 ? 1 : 0;
+}
+
+async function cmdPublish(args: Args): Promise<number> {
+  const config = await configFor(args);
+  const token = blobTokenFromEnv();
+  if (!token) {
+    process.stderr.write("Set COUNCIL_BLOB_TOKEN (or BLOB_READ_WRITE_TOKEN / LAB_BLOB_TOKEN).\n");
+    return 2;
+  }
+  const file = args.rest[0] ?? join(config.councilHome, "sweep.json");
+  if (!existsSync(file)) {
+    process.stderr.write(`No report at ${file} — run \`council sweep\` first.\n`);
+    return 2;
+  }
+  const result = await publishFile(file, {
+    token,
+    path: config.publish.blobPath ?? "council/sweep.json",
+    ...(config.publish.cacheMaxAge === undefined ? {} : { cacheMaxAge: config.publish.cacheMaxAge }),
+  });
+  if (!result.ok) {
+    process.stderr.write(`publish failed: ${result.error}\n`);
+    return 1;
+  }
+  process.stdout.write(`${result.url ?? config.publish.blobPath}\n`);
+  return 0;
+}
+
 async function cmdClean(args: Args): Promise<number> {
   const config = await configFor(args);
   const taskId = args.rest[0];
@@ -530,6 +631,10 @@ async function main(argv: readonly string[]): Promise<number> {
       return cmdVerify(args);
     case "actions":
       return cmdActions(args);
+    case "sweep":
+      return cmdSweep(args);
+    case "publish":
+      return cmdPublish(args);
     case "clean":
       return cmdClean(args);
     case "serve-mcp": {

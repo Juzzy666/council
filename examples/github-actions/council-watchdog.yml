@@ -1,0 +1,58 @@
+# Restarts the sweep if no sweep has run recently.
+#
+# The same shape as thelab-pulse's watchdog: the scheduler occasionally drops a
+# cron, and a council that silently stops sweeping looks exactly like a council
+# with nothing to do.
+name: council-watchdog
+
+on:
+  schedule:
+    - cron: "43 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+
+concurrency:
+  group: council-watchdog
+  cancel-in-progress: true
+
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch a sweep if none has run in the last 12 hours
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/${{ github.repository }}/actions/workflows/council-sweep.yml/runs?per_page=1" \
+            --jq '.workflow_runs[0].created_at // ""')
+          running=$(gh api "repos/${{ github.repository }}/actions/workflows/council-sweep.yml/runs?status=in_progress&per_page=1" \
+            --jq '.total_count')
+          echo "latest=$latest in_progress=$running"
+
+          if [ "$running" != "0" ]; then
+            echo "a sweep is already running"
+            exit 0
+          fi
+
+          if [ -z "$latest" ]; then
+            stale=1
+          else
+            age=$(( $(date +%s) - $(date -d "$latest" +%s) ))
+            stale=$([ "$age" -gt 43200 ] && echo 1 || echo 0)
+          fi
+
+          if [ "$stale" = "1" ]; then
+            echo "no sweep in 12h — dispatching"
+            gh api -X POST "repos/${{ github.repository }}/actions/workflows/council-sweep.yml/dispatches" -f ref=main
+            if [ -n "${NTFY_TOPIC:-}" ]; then
+              curl -s -X POST "https://ntfy.sh" -H "content-type: application/json" -d "{
+                \"topic\":\"$NTFY_TOPIC\",\"title\":\"🩹 council — sweep self-healed\",
+                \"message\":\"No sweep in 12h; watchdog dispatched one.\",\"priority\":2,
+                \"tags\":[\"adhesive_bandage\"]}" || true
+            fi
+          fi

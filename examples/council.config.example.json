@@ -1,0 +1,30 @@
+{
+  "autonomy": {
+    "mode": "autonomous",
+    "mergeWhenGreen": true,
+    "mergeWithoutChecks": false,
+    "mergeMethod": "squash",
+    "closeIssueOnMerge": true,
+    "deleteBranchOnMerge": true,
+    "openPullRequests": true
+  },
+  "requireChecks": true,
+  "tiebreak": "judge",
+  "judgeSeat": "claude",
+  "budget": { "perTaskUsd": 6, "perTurnUsd": 1.5 },
+  "limits": { "critiqueRounds": 2, "reviewRounds": 2, "peerDepth": 2, "turnTimeoutMs": 900000 },
+  "sweep": {
+    "labels": ["council"],
+    "runningLabel": "council:running",
+    "parkedLabel": "council:parked",
+    "budgetUsd": 20,
+    "maxTasksPerRepo": 2
+  },
+  "notify": { "ntfyTopic": "replace-with-your-topic" },
+  "publish": { "blobPath": "council/sweep.json", "cacheMaxAge": 60 },
+  "projects": [
+    { "repo": "you/project-a" },
+    { "repo": "you/project-b", "labels": ["council", "safe-to-automate"] },
+    { "repo": "you/project-c", "enabled": false }
+  ]
+}

@@ -1,0 +1,165 @@
+<!doctype html>
+<!--
+  Council status page.
+
+  Drop this into an opentab site (e.g. hq/council.html) and point BLOB_URL at
+  the published sweep report. It is deliberately a single static file with no
+  build step and no dependencies, like the rest of the sites: it fetches one
+  JSON object and renders it.
+
+  The report is written by `council sweep` and uploaded by `council publish`
+  (or automatically, when COUNCIL_BLOB_TOKEN is set).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Council</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfaf8;
+        --panel: #ffffff;
+        --ink: #1a1814;
+        --muted: #6b6559;
+        --line: #e6e1d8;
+        --ok: #1f7a4d;
+        --warn: #9a6512;
+        --bad: #a6341f;
+        --accent: #2f5fa8;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #15140f;
+          --panel: #1e1c17;
+          --ink: #f2efe8;
+          --muted: #9d968a;
+          --line: #322e26;
+          --ok: #5fcf96;
+          --warn: #e0b45f;
+          --bad: #ef8b74;
+          --accent: #87b0ef;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        padding: 24px 16px 64px;
+      }
+      main { max-width: 860px; margin: 0 auto; }
+      h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+      .tile {
+        flex: 1 1 150px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .tile b { display: block; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+      .tile span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 10px;
+      }
+      .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+      .head a { color: var(--accent); text-decoration: none; font-weight: 600; }
+      .pill {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        padding: 1px 8px;
+      }
+      .merged { color: var(--ok); }
+      .pull_request, .parked { color: var(--warn); }
+      .failed, .skipped { color: var(--bad); }
+      .why { color: var(--muted); font-size: 13px; margin-top: 6px; }
+      .meta { color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+      .err { color: var(--bad); font-size: 13px; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Council</h1>
+      <div class="sub" id="when">loading…</div>
+      <div class="row" id="tiles"></div>
+      <div id="tasks"></div>
+      <div id="errors"></div>
+    </main>
+    <script>
+      // Point this at your published report.
+      const BLOB_URL = "https://REPLACE-ME.public.blob.vercel-storage.com/council/sweep.json";
+
+      const el = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+      function ago(iso) {
+        const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+        if (seconds < 90) return "just now";
+        if (seconds < 5400) return `${Math.round(seconds / 60)} min ago`;
+        if (seconds < 172800) return `${Math.round(seconds / 3600)} h ago`;
+        return `${Math.round(seconds / 86400)} days ago`;
+      }
+
+      function render(report) {
+        el("when").textContent =
+          `last sweep ${ago(report.endedAt)} · ${new Date(report.endedAt).toLocaleString()}`;
+
+        const results = report.results ?? [];
+        const count = (action) => results.filter((r) => r.action === action).length;
+        el("tiles").innerHTML = [
+          ["merged", count("merged")],
+          ["awaiting you", count("pull_request") + count("parked")],
+          ["failed", count("failed")],
+          ["spend", `$${(report.spendUsd ?? 0).toFixed(2)}`],
+        ]
+          .map(([label, value]) => `<div class="tile"><b>${esc(value)}</b><span>${esc(label)}</span></div>`)
+          .join("");
+
+        el("tasks").innerHTML = results.length
+          ? results
+              .map(
+                (r) => `
+          <div class="card">
+            <div class="head">
+              <a href="${esc(r.pullRequest ?? `https://github.com/${r.repo}/issues/${r.issue}`)}">${esc(r.repo)}#${esc(r.issue)}</a>
+              <span class="pill ${esc(r.action)}">${esc(String(r.action).replace("_", " "))}</span>
+              <span class="meta">${esc(r.phase)}</span>
+            </div>
+            <div class="why">${esc(r.why)}</div>
+            <div class="meta"><code>${esc(r.taskId)}</code>${r.spendUsd ? ` · $${r.spendUsd.toFixed(4)}` : ""}${r.branch ? ` · ${esc(r.branch)}` : ""}</div>
+          </div>`,
+              )
+              .join("")
+          : `<div class="card"><div class="why">The last sweep found no labelled issues. Nothing to do is the normal state.</div></div>`;
+
+        el("errors").innerHTML = (report.errors ?? [])
+          .map((e) => `<div class="card err">${esc(e)}</div>`)
+          .join("");
+      }
+
+      fetch(`${BLOB_URL}?t=${Date.now()}`)
+        .then((response) => {
+          if (!response.ok) throw new Error(`report fetch failed: ${response.status}`);
+          return response.json();
+        })
+        .then(render)
+        .catch((error) => {
+          el("when").textContent = "could not load the report";
+          el("errors").innerHTML = `<div class="card err">${esc(error.message)}<div class="why">Has a sweep run and published yet? Check BLOB_URL in this page's source.</div></div>`;
+        });
+    </script>
+  </body>
+</html>

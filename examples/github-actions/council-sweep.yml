@@ -1,0 +1,103 @@
+# One unattended council pass over every configured project.
+#
+# Put this in whichever repository holds your council.config.json (a small
+# "ops" repo is tidiest — it never needs to be one of the projects). Each run
+# reads labelled issues across your projects, convenes the council, and lands
+# the results.
+#
+# Secrets this needs:
+#   ANTHROPIC_API_KEY     the Claude Code seat
+#   META_API_KEY          the Muse Code seat (omit to run Claude-only)
+#   COUNCIL_GH_TOKEN      a PAT with repo scope on every project — the built-in
+#                         GITHUB_TOKEN is scoped to THIS repository only and
+#                         cannot read issues or open PRs in the others
+#   LAB_BLOB_TOKEN        optional: publishes the report for the status page
+#   NTFY_TOPIC            optional: push notification on each landing
+name: council-sweep
+
+on:
+  schedule:
+    # Every six hours, on an odd minute: scheduled runners are busiest on the hour.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Restrict to one project (owner/repo)"
+        required: false
+      dry_run:
+        description: "Report what it would do, change nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two sweeps at once: a task is claimed by label, but overlapping runs
+  # would still fight over the same checkouts.
+  group: council-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # Job level, not step level: a step's `if:` cannot see env declared inside
+    # that same step, so `if: env.META_API_KEY != ''` would always be false.
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      META_API_KEY: ${{ secrets.META_API_KEY }}
+      COUNCIL_GITHUB_TOKEN: ${{ secrets.COUNCIL_GH_TOKEN }}
+      COUNCIL_BLOB_TOKEN: ${{ secrets.LAB_BLOB_TOKEN }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      MUSE_NO_AUTO_UPDATE: "1"
+      # A ceiling the schedule cannot talk its way past.
+      COUNCIL_BUDGET_USD: "20"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install council
+        run: npm install -g council@latest
+
+      - name: Install the Claude Code seat
+        run: npm install -g @anthropic-ai/claude-code@2.1.296
+
+      - name: Install the Muse Code seat
+        if: env.META_API_KEY != ''
+        run: |
+          # Meta's own installer, per dev.meta.ai/docs/muse-code.
+          curl -fsSL https://dev.meta.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show what the council can see
+        run: council doctor || true
+
+      - name: Sweep
+        run: |
+          council sweep \
+            ${{ github.event.inputs.only && format('--only {0}', github.event.inputs.only) || '' }} \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }} \
+            --json | tee sweep-report.json
+
+      - name: Keep the report with the run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: council-sweep-report
+          path: |
+            sweep-report.json
+            .council/ledger.jsonl
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Alert if the sweep itself broke
+        if: failure() && env.NTFY_TOPIC != ''
+        run: |
+          curl -s -X POST "https://ntfy.sh" -H "content-type: application/json" -d "{
+            \"topic\":\"$NTFY_TOPIC\",\"title\":\"🚨 council — sweep failed\",
+            \"message\":\"The sweep job itself errored. See the Actions log.\",
+            \"priority\":5,\"tags\":[\"rotating_light\"]}" || true
